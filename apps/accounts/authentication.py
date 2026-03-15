@@ -20,10 +20,10 @@ def _ensure_sync(func, *args, **kwargs):
     loop, causing ORM calls to raise ``SynchronousOnlyOperation``.
 
     This helper detects that situation and re-executes the callable in a
-    dedicated worker thread.  ``DJANGO_ALLOW_ASYNC_UNSAFE`` is set inside
-    the worker so that Django's ``@async_unsafe`` guard on the database
-    cursor is bypassed – the call is genuinely synchronous and isolated
-    from the event loop.
+    dedicated worker thread.  ``DJANGO_ALLOW_ASYNC_UNSAFE`` is set so
+    that Django's ``@async_unsafe`` guard on the database cursor is
+    bypassed – the call is genuinely synchronous and isolated from the
+    event loop.
     """
     try:
         asyncio.get_running_loop()
@@ -32,17 +32,22 @@ def _ensure_sync(func, *args, **kwargs):
         return func(*args, **kwargs)
 
     # Running inside an async context – execute in an isolated thread.
+    # Allow Django ORM operations from threads that may inherit the async
+    # context (e.g. gevent greenlets sharing the OS thread).  The env-var
+    # is set once before spawning the worker so it is visible process-wide
+    # by the time the worker runs.
+    os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
+
     result = [None]
     exception = [None]
 
     def _worker():
-        os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
         try:
             result[0] = func(*args, **kwargs)
         except BaseException as e:
             exception[0] = e
 
-    t = threading.Thread(target=_worker, daemon=True)
+    t = threading.Thread(target=_worker)
     t.start()
     t.join()
 
